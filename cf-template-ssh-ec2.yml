@@ -1,0 +1,178 @@
+# 2nd version: after Troy's modifications.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for an SSH with restricted EC2 permissions and configured S3 access.
+
+Parameters:
+  StudentGroupName:
+    Description: "Name of the pre-existing IAM group."
+    Type: String
+    Default: "Group"
+  AmazonLinux2023AmiId:
+    Description: "Latest Amazon Linux 2023 AMI ID"
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64'
+
+Resources:
+  # Custom VPC for Level Up Bank
+  LevelUpBankVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: CustomVPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: CustomInternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref CustomVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CustomVPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: CustomPublicSubnet
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref CustomVPC
+      Tags:
+        - Key: Name
+          Value: CustomRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref PublicSubnet
+
+  # Policy for StudentGroup - SSH lab - Part 1
+  EC2UserPolicy1:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: "SshPolicy1"
+      Groups:
+        - Ref: StudentGroup
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "ec2:Describe*"
+              - "ec2:Get*"
+            Resource: "*"
+
+          - Effect: Allow
+            Action:
+              - "ec2:RunInstances"
+              - "ec2:StartInstances"
+              - "ec2:StopInstances"
+              - "ec2:TerminateInstances"
+            Condition:
+              StringEqualsIfExists:
+                aws:RequestedRegion: "us-east-2"
+                ec2:InstanceType: "t2.micro"
+                ec2:ImageId: !Ref AmazonLinux2023AmiId
+            Resource: "*"
+
+  # Policy for StudentGroup - SSH lab - Part 2
+  EC2UserPolicy2:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: "SshPolicy2"
+      Groups:
+        - Ref: StudentGroupName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "ec2:ModifySecurityGroupRules"
+              - "ec2:AllocateAddress"
+              - "ec2:AssociateAddress"
+              - "ec2:ModifySubnetAttribute"
+              - "ec2:CreateTags"
+              - "ec2:CreateSecurityGroup"
+              - "ec2:DeleteSecurityGroup"
+            Resource: "*"
+
+          - Effect: Deny
+            Action:
+              - "ec2-instance-connect:SendSSHPublicKey"
+              - "ec2-instance-connect:SendSerialConsoleSSHPublicKey"
+            Resource: "*"
+
+          - Effect: Deny
+            Action:
+              - "ssm:StartSession"
+              - "ssm:SendCommand"
+              - "ssm:StartAutomationExecution"
+            Resource: "*"
+
+  # Policy for StudentGroup - SSH lab - Part 3
+  EC2UserPolicy3:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: "SshLabPolicy3"
+      Groups:
+        - Ref: StudentGroupName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "s3:CreateBucket"
+              - "s3:DeleteBucket"
+              - "s3:ListBucket"
+              - "s3:ListObjects"
+              - "s3:GetObject"
+            Resource: "arn:aws:s3:::ssh-assessment-bucket-*"
+
+          - Effect: Allow
+            Action:
+              - "s3:PutObject"
+            Condition:
+              NumericLessThanEquals:
+                s3:objectMaxSize: 10485760
+            Resource: "arn:aws:s3:::ssh-assessment-bucket-*"
+
+          - Effect: Allow
+            Action:
+              - "s3:GetObject"
+              - "s3:DeleteObject"
+              - "s3:ListBucketVersions"
+            Resource: "arn:aws:s3:::ssh-assessment-bucket-*"
+
+
+Outputs:
+  VPCId:
+    Description: "VPC ID for the SSH lab"
+    Value: !Ref LevelUpBankVPC
+
+  SubnetId:
+    Description: "Public Subnet ID"
+    Value: !Ref PublicSubnet
+
